@@ -81,25 +81,63 @@ def get_video_info(url: str, cookies_path: str = None) -> dict:
 def select_best_video_format(formats: list, max_height: int = 720) -> dict:
     """
     Select the best video format with height ≤ max_height.
-    Prefers formats with both video codec and highest resolution.
+    Prefers DASH formats (with direct fragment URLs) over HLS.
     """
     video_formats = [
         f for f in formats
         if f.get('vcodec') != 'none'
+        and f.get('acodec') == 'none'  # Video-only (no muxed)
         and f.get('height') is not None
         and f.get('height') <= max_height
     ]
 
     if not video_formats:
+        # Fallback: include muxed formats
+        video_formats = [
+            f for f in formats
+            if f.get('vcodec') != 'none'
+            and f.get('height') is not None
+            and f.get('height') <= max_height
+        ]
+
+    if not video_formats:
         raise Exception(f"No video format found with height ≤ {max_height}")
 
-    # Sort by height (descending), then by tbr (total bitrate, descending)
-    video_formats.sort(
-        key=lambda f: (f.get('height', 0), f.get('tbr', 0) or 0),
-        reverse=True
-    )
+    # Scoring function: prefer DASH (has fragments array with URLs) over HLS
+    def format_score(f):
+        height = f.get('height', 0)
+        tbr = f.get('tbr', 0) or 0
 
-    return video_formats[0]
+        # Check if format has direct fragment URLs (DASH)
+        fragments = f.get('fragments', [])
+        has_direct_fragments = len(fragments) > 1 or (
+            len(fragments) == 1 and
+            fragments[0].get('url', '').startswith('https://') and
+            'manifest' not in fragments[0].get('url', '').lower()
+        )
+
+        # Prefer formats with direct URLs (not HLS manifest)
+        url = f.get('url', '')
+        is_hls = 'manifest' in url.lower() or url.endswith('.m3u8')
+
+        # Score: direct fragments > direct URL > HLS
+        if has_direct_fragments:
+            url_score = 3
+        elif url and not is_hls:
+            url_score = 2
+        else:
+            url_score = 1
+
+        return (url_score, height, tbr)
+
+    video_formats.sort(key=format_score, reverse=True)
+
+    selected = video_formats[0]
+    print(f"[VideoFormat] Selected: {selected.get('format_id')} - {selected.get('height')}p")
+    print(f"[VideoFormat] Has fragments: {len(selected.get('fragments', []))}")
+    print(f"[VideoFormat] URL type: {'HLS' if 'manifest' in selected.get('url', '').lower() else 'Direct'}")
+
+    return selected
 
 
 def select_best_audio_format(formats: list) -> dict:
@@ -127,20 +165,75 @@ def select_best_audio_format(formats: list) -> dict:
     return audio_formats[0]
 
 
-def extract_fragment_urls(format_info: dict) -> list:
+def fetch_hls_segments(manifest_url: str) -> list:
+    """
+    Fetch HLS manifest and extract segment URLs.
+    """
+    print(f"[HLS] Fetching manifest: {manifest_url[:80]}...")
+
+    try:
+        req = urllib.request.Request(manifest_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content = response.read().decode('utf-8')
+
+        # Parse m3u8 - extract segment URLs
+        segments = []
+        base_url = manifest_url.rsplit('/', 1)[0] + '/'
+
+        for line in content.split('\n'):
+            line = line.strip()
+            if line and not line.startswith('#'):
+                # This is a segment URL
+                if line.startswith('http'):
+                    segments.append(line)
+                else:
+                    # Relative URL
+                    segments.append(base_url + line)
+
+        print(f"[HLS] Found {len(segments)} segments")
+        return segments
+
+    except Exception as e:
+        print(f"[HLS] Error fetching manifest: {e}")
+        return []
+
+
+def extract_fragment_urls(format_info: dict, fetch_hls: bool = True) -> list:
     """
     Extract fragment URLs from a format.
     Works with HLS and DASH formats.
+    If fetch_hls=True, will fetch and parse HLS manifest to get segment URLs.
     """
     fragments = format_info.get('fragments', [])
 
     if fragments:
-        # HLS/DASH with fragments
-        return [f.get('url') or f.get('path') for f in fragments if f.get('url') or f.get('path')]
+        # Check if it's HLS manifest or direct fragments
+        urls = []
+        for f in fragments:
+            url = f.get('url') or f.get('path')
+            if url:
+                urls.append(url)
+
+        # If single URL is HLS manifest, fetch segment URLs
+        if len(urls) == 1 and fetch_hls:
+            url = urls[0]
+            if 'manifest' in url.lower() or '.m3u8' in url.lower():
+                hls_segments = fetch_hls_segments(url)
+                if hls_segments:
+                    return hls_segments
+
+        return urls
 
     # Single URL (progressive format)
     url = format_info.get('url')
     if url:
+        # Check if it's HLS manifest
+        if fetch_hls and ('manifest' in url.lower() or '.m3u8' in url.lower()):
+            hls_segments = fetch_hls_segments(url)
+            if hls_segments:
+                return hls_segments
         return [url]
 
     return []
