@@ -6,6 +6,7 @@ Takes a YouTube URL and returns:
 - Audio manifest (fragments URLs for best audio)
 
 Uses yt-dlp installed via pip with deno for n-parameter challenge.
+Supports cookies via URL parameter to bypass bot detection.
 """
 
 import runpod
@@ -13,9 +14,39 @@ import subprocess
 import json
 import os
 import sys
+import urllib.request
+
+# Cookies file path (downloaded at runtime)
+COOKIES_PATH = '/tmp/cookies.txt'
 
 
-def get_video_info(url: str) -> dict:
+def download_cookies(cookies_url: str) -> str:
+    """
+    Download cookies file from URL to /tmp/cookies.txt.
+    Returns path to cookies file or None if failed.
+    """
+    if not cookies_url:
+        return None
+
+    print(f"[Cookies] Downloading from: {cookies_url[:50]}...")
+
+    try:
+        urllib.request.urlretrieve(cookies_url, COOKIES_PATH)
+
+        # Verify file was downloaded
+        if os.path.exists(COOKIES_PATH):
+            size = os.path.getsize(COOKIES_PATH)
+            print(f"[Cookies] Downloaded: {size} bytes")
+            return COOKIES_PATH
+        else:
+            print("[Cookies] Download failed: file not created")
+            return None
+    except Exception as e:
+        print(f"[Cookies] Download error: {e}")
+        return None
+
+
+def get_video_info(url: str, cookies_path: str = None) -> dict:
     """
     Extract video info with all format details using yt-dlp.
     Returns the full JSON info from yt-dlp.
@@ -25,8 +56,14 @@ def get_video_info(url: str) -> dict:
         '--dump-json',
         '--no-download',
         '--remote-components', 'ejs:github',  # deno for n-parameter
-        url
     ]
+
+    # Add cookies if available
+    if cookies_path and os.path.exists(cookies_path):
+        cmd.extend(['--cookies', cookies_path])
+        print(f"[yt-dlp] Using cookies: {cookies_path}")
+
+    cmd.append(url)
 
     print(f"[yt-dlp] Extracting info: {url}")
     print(f"[yt-dlp] Command: {' '.join(cmd)}")
@@ -154,12 +191,19 @@ def handler(event):
         input_data = event.get('input', {})
         url = input_data.get('url')
         max_height = input_data.get('max_video_height', 720)
+        cookies_url = input_data.get('cookies_url')  # Optional: URL to cookies file
 
         if not url:
             return {'error': 'Missing required parameter: url'}
 
         print(f"[Handler] Processing URL: {url}")
         print(f"[Handler] Max video height: {max_height}")
+        print(f"[Handler] Cookies URL: {'provided' if cookies_url else 'none'}")
+
+        # Download cookies if URL provided
+        cookies_path = None
+        if cookies_url:
+            cookies_path = download_cookies(cookies_url)
 
         # Check yt-dlp version
         version_result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True)
@@ -170,7 +214,7 @@ def handler(event):
         print(f"[deno] Path: {deno_result.stdout.strip() or 'NOT FOUND'}")
 
         # Extract video info
-        info = get_video_info(url)
+        info = get_video_info(url, cookies_path)
 
         title = info.get('title', 'Unknown')
         duration = info.get('duration', 0)
