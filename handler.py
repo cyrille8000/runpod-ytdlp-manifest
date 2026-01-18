@@ -103,10 +103,11 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
     if not video_formats:
         raise Exception(f"No video format found with height ≤ {max_height}")
 
-    # Scoring function: prefer DASH (has fragments array with URLs) over HLS
+    # Scoring function: prefer webm (VP9) > mp4 (H.264), and DASH over HLS
     def format_score(f):
         height = f.get('height', 0)
         tbr = f.get('tbr', 0) or 0
+        ext = f.get('ext', '')
 
         # Check if format has direct fragment URLs (DASH)
         fragments = f.get('fragments', [])
@@ -128,7 +129,15 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
         else:
             url_score = 1
 
-        return (url_score, height, tbr)
+        # Prefer webm (VP9) over mp4 (H.264)
+        if ext == 'webm':
+            ext_score = 2
+        elif ext == 'mp4':
+            ext_score = 1
+        else:
+            ext_score = 0
+
+        return (url_score, ext_score, height, tbr)
 
     video_formats.sort(key=format_score, reverse=True)
 
