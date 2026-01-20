@@ -17,6 +17,7 @@ from typing import Optional
 import subprocess
 import json
 import os
+import time
 import urllib.request
 import uvicorn
 import asyncio
@@ -44,6 +45,9 @@ class Stats:
     total_extractions: int = 0
     failed_extractions: int = 0
     queue_full_rejections: int = 0
+    peak_concurrent: int = 0  # Max simultaneous extractions seen
+    total_extraction_time: float = 0.0  # Sum of all extraction times
+    waiting_in_queue: int = 0  # Requests waiting for a slot
 
 stats = Stats()
 
@@ -399,15 +403,20 @@ async def orchestrateur_gpu(request: dict):
 @app.get("/stats")
 async def get_stats():
     """Server statistics for monitoring."""
+    successful = stats.total_extractions - stats.failed_extractions
+    avg_time = stats.total_extraction_time / max(successful, 1)
     return {
         "active_extractions": stats.active_extractions,
+        "waiting_in_queue": stats.waiting_in_queue,
         "max_concurrent": MAX_CONCURRENT_EXTRACTIONS,
+        "peak_concurrent": stats.peak_concurrent,
         "total_extractions": stats.total_extractions,
         "failed_extractions": stats.failed_extractions,
         "queue_full_rejections": stats.queue_full_rejections,
         "success_rate": round(
-            (stats.total_extractions - stats.failed_extractions) / max(stats.total_extractions, 1) * 100, 2
-        )
+            successful / max(stats.total_extractions, 1) * 100, 2
+        ),
+        "avg_extraction_time_seconds": round(avg_time, 2),
     }
 
 
@@ -443,6 +452,10 @@ async def extract_manifests(request: ExtractRequest):
     Returns fragment URLs for downloading video (<=720p) and audio separately.
     Concurrency is limited to MAX_CONCURRENT_EXTRACTIONS simultaneous requests.
     """
+    # Track queue waiting
+    async with stats_lock:
+        stats.waiting_in_queue += 1
+
     # Try to acquire semaphore with timeout (don't wait forever)
     try:
         await asyncio.wait_for(
@@ -451,6 +464,7 @@ async def extract_manifests(request: ExtractRequest):
         )
     except asyncio.TimeoutError:
         async with stats_lock:
+            stats.waiting_in_queue -= 1
             stats.queue_full_rejections += 1
         print(f"[API] Server overloaded - rejected request (active: {stats.active_extractions})")
         raise HTTPException(
@@ -458,10 +472,14 @@ async def extract_manifests(request: ExtractRequest):
             detail=f"Server overloaded. {stats.active_extractions} extractions in progress. Retry later."
         )
 
-    # Track stats
+    # Track stats - got a slot
+    start_time = time.time()
     async with stats_lock:
+        stats.waiting_in_queue -= 1
         stats.active_extractions += 1
         stats.total_extractions += 1
+        if stats.active_extractions > stats.peak_concurrent:
+            stats.peak_concurrent = stats.active_extractions
 
     try:
         print(f"[API] Processing URL: {request.url} (active: {stats.active_extractions}/{MAX_CONCURRENT_EXTRACTIONS})")
@@ -515,8 +533,10 @@ async def extract_manifests(request: ExtractRequest):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Always release semaphore and update stats
+        extraction_time = time.time() - start_time
         async with stats_lock:
             stats.active_extractions -= 1
+            stats.total_extraction_time += extraction_time
         extraction_semaphore.release()
 
 
