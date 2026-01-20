@@ -30,7 +30,7 @@ YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
 # Concurrency configuration (optimized for 4 OCPU / 24GB RAM)
 MAX_CONCURRENT_EXTRACTIONS = 60  # Max simultaneous yt-dlp processes
 EXTRACTION_TIMEOUT = 120  # Timeout per extraction (seconds)
-QUEUE_TIMEOUT = 3600  # Max wait time in queue (1 hour - effectively unlimited)
+QUEUE_TIMEOUT = 180  # Max wait time in queue (3 minutes)
 
 # Semaphore to limit concurrent extractions
 extraction_semaphore: asyncio.Semaphore = None
