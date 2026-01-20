@@ -189,6 +189,7 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
         '--dump-json',
         '--no-download',
         '--extractor-args', 'youtube:player_client=ios,web',
+        '--remote-components', 'ejs:github',  # Use deno to solve YouTube challenges
     ]
 
     # Add cookies if available
