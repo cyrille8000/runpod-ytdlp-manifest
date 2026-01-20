@@ -29,7 +29,9 @@ COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
 YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
 
 # Concurrency configuration (optimized for 4 OCPU / 24GB RAM)
-MAX_CONCURRENT_EXTRACTIONS = 80  # Max simultaneous yt-dlp processes
+MAX_CONCURRENT_EXTRACTIONS = 60  # Max simultaneous yt-dlp processes
+MAX_RETRIES = 3  # Max retry attempts for yt-dlp extraction
+RETRY_DELAY = 4  # Seconds between retries
 EXTRACTION_TIMEOUT = 120  # Timeout per extraction (seconds)
 QUEUE_TIMEOUT = 180  # Max wait time in queue (3 minutes)
 
@@ -187,7 +189,7 @@ class HealthResponse(BaseModel):
 # --- Core Functions ---
 
 async def get_video_info(url: str, cookies_path: str = None) -> dict:
-    """Extract video info with all format details using yt-dlp (async)."""
+    """Extract video info with all format details using yt-dlp (async) with retry."""
     cmd = [
         'yt-dlp',
         '--dump-json',
@@ -202,27 +204,44 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
 
     cmd.append(url)
 
-    print(f"[yt-dlp] Extracting info: {url}")
+    last_error = None
 
-    # Async subprocess - non-blocking
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"[yt-dlp] Extracting info (attempt {attempt}/{MAX_RETRIES}): {url}")
 
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=EXTRACTION_TIMEOUT)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()  # Clean up zombie process
-        raise Exception(f"yt-dlp timeout after {EXTRACTION_TIMEOUT}s")
+        # Async subprocess - non-blocking
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
 
-    if proc.returncode != 0:
-        raise Exception(f"yt-dlp error: {stderr.decode()[-1000:]}")
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=EXTRACTION_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()  # Clean up zombie process
+            last_error = f"yt-dlp timeout after {EXTRACTION_TIMEOUT}s"
+            print(f"[yt-dlp] Attempt {attempt} failed: {last_error}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+            continue
 
-    info = json.loads(stdout.decode())
-    return info
+        if proc.returncode != 0:
+            last_error = f"yt-dlp error: {stderr.decode()[-500:]}"
+            print(f"[yt-dlp] Attempt {attempt} failed: {last_error[:100]}...")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+            continue
+
+        # Success!
+        info = json.loads(stdout.decode())
+        if attempt > 1:
+            print(f"[yt-dlp] Succeeded on attempt {attempt}")
+        return info
+
+    # All retries failed
+    raise Exception(last_error)
 
 
 def select_best_video_format(formats: list, max_height: int = 720) -> dict:
