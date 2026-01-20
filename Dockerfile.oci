@@ -1,0 +1,49 @@
+# OCI ARM64 - YouTube Manifest Extractor API
+# FastAPI server with yt-dlp for extracting YouTube video/audio URLs
+#
+# Build: docker build -f Dockerfile.oci -t ytdlp-api .
+# Run:   docker run -d -p 8080:8080 ytdlp-api
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    ca-certificates \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install deno (supports ARM64)
+# Using official install script which auto-detects architecture
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_INSTALL="/root/.deno"
+ENV PATH="$DENO_INSTALL/bin:$PATH"
+
+# Verify deno installation
+RUN deno --version
+
+# Copy requirements first (for Docker cache)
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Verify yt-dlp installation
+RUN yt-dlp --version
+
+# Copy application
+COPY handler_api.py .
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start server
+CMD ["python3", "-u", "handler_api.py"]
