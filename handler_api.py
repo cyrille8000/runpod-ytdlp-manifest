@@ -1,8 +1,8 @@
 """
-OCI Docker - Multi-Platform Video Manifest Extractor API
+OCI Docker - Video Manifest Extractor API
 
-FastAPI server that extracts video/audio manifest URLs from multiple platforms.
-Supports: YouTube, TikTok, Instagram, Facebook
+FastAPI server that extracts video/audio manifest URLs.
+Supports: YouTube, TikTok
 Replaces RunPod serverless handler for always-on OCI deployment.
 
 Endpoints:
@@ -24,25 +24,14 @@ import urllib.request
 import uvicorn
 import asyncio
 
-# Platform configuration with cookies
-# YouTube: required (rate limiting)
-# Instagram/Facebook: required (server IP rate-limited)
-# TikTok: not needed
+# Platform configuration
+# YouTube: cookies required (rate limiting)
+# TikTok: no cookies needed
 PLATFORMS_CONFIG = {
     'youtube': {
         'domains': ['youtube.com', 'youtu.be'],
         'cookies_url': 'https://files.dubbingspark.com/config/youtube_cookies.txt',
         'cookies_path': '/tmp/youtube_cookies.txt'
-    },
-    'instagram': {
-        'domains': ['instagram.com'],
-        'cookies_url': 'https://files.dubbingspark.com/config/instagram_cookies.txt',
-        'cookies_path': '/tmp/instagram_cookies.txt'
-    },
-    'facebook': {
-        'domains': ['facebook.com', 'fb.watch'],
-        'cookies_url': 'https://files.dubbingspark.com/config/facebook_cookies.txt',
-        'cookies_path': '/tmp/facebook_cookies.txt'
     },
     'tiktok': {
         'domains': ['tiktok.com'],
