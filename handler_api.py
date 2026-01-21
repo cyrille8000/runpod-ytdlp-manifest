@@ -245,7 +245,10 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
 
 
 def select_best_video_format(formats: list, max_height: int = 720) -> dict:
-    """Select the best video format with height <= max_height. Prioritizes VP9 codec."""
+    """Select the best video format with height <= max_height. Prioritizes VP9 codec.
+    Falls back to combined (video+audio) formats for platforms like TikTok."""
+
+    # First try: video-only formats (YouTube style)
     video_formats = [
         f for f in formats
         if f.get('vcodec') != 'none'
@@ -254,6 +257,7 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
         and f.get('height') <= max_height
     ]
 
+    # Fallback: combined formats with video (TikTok style)
     if not video_formats:
         video_formats = [
             f for f in formats
@@ -261,6 +265,8 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
             and f.get('height') is not None
             and f.get('height') <= max_height
         ]
+        if video_formats:
+            print("[Video] No video-only formats, using combined format (TikTok mode)")
 
     if not video_formats:
         raise Exception(f"No video format found with height <= {max_height}")
@@ -310,15 +316,28 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
 
 
 def select_best_audio_format(formats: list) -> dict:
-    """Select the best audio-only format. Prioritizes original track and Opus codec."""
+    """Select the best audio-only format. Prioritizes original track and Opus codec.
+    Falls back to combined (video+audio) formats for platforms like TikTok."""
+
+    # First try: audio-only formats (YouTube style)
     audio_formats = [
         f for f in formats
         if f.get('vcodec') == 'none'
         and f.get('acodec') != 'none'
     ]
 
+    # Fallback: combined formats with audio (TikTok style)
     if not audio_formats:
-        raise Exception("No audio-only format found")
+        audio_formats = [
+            f for f in formats
+            if f.get('acodec') is not None
+            and f.get('acodec') != 'none'
+        ]
+        if audio_formats:
+            print("[Audio] No audio-only formats, using combined format (TikTok mode)")
+
+    if not audio_formats:
+        raise Exception("No audio format found")
 
     def audio_score(f):
         # Prioritize original audio track (higher language_preference = original)
