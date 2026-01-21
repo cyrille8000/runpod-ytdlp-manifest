@@ -24,29 +24,31 @@ import urllib.request
 import uvicorn
 import asyncio
 
-# Cookies configuration (multi-platform)
-COOKIES_CONFIG = {
+# Platform configuration
+# Only YouTube requires cookies (rate limiting)
+# TikTok, Instagram, Facebook work without cookies
+PLATFORMS_CONFIG = {
     'youtube': {
-        'url': 'https://files.dubbingspark.com/config/youtube_cookies.txt',
-        'path': '/tmp/youtube_cookies.txt',
-        'domains': ['youtube.com', 'youtu.be']
-    },
-    'instagram': {
-        'url': 'https://files.dubbingspark.com/config/instagram_cookies.txt',
-        'path': '/tmp/instagram_cookies.txt',
-        'domains': ['instagram.com']
-    },
-    'facebook': {
-        'url': 'https://files.dubbingspark.com/config/facebook_cookies.txt',
-        'path': '/tmp/facebook_cookies.txt',
-        'domains': ['facebook.com', 'fb.watch']
+        'domains': ['youtube.com', 'youtu.be'],
+        'needs_cookies': True
     },
     'tiktok': {
-        'url': None,  # TikTok doesn't need cookies
-        'path': None,
-        'domains': ['tiktok.com']
+        'domains': ['tiktok.com'],
+        'needs_cookies': False
+    },
+    'instagram': {
+        'domains': ['instagram.com'],
+        'needs_cookies': False
+    },
+    'facebook': {
+        'domains': ['facebook.com', 'fb.watch'],
+        'needs_cookies': False
     }
 }
+
+# YouTube cookies configuration (only platform that needs cookies)
+YOUTUBE_COOKIES_URL = 'https://files.dubbingspark.com/config/youtube_cookies.txt'
+YOUTUBE_COOKIES_PATH = '/tmp/youtube_cookies.txt'
 COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
 YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
 
@@ -54,18 +56,17 @@ YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
 def detect_platform(url: str) -> str:
     """Detect platform from URL."""
     url_lower = url.lower()
-    for platform, config in COOKIES_CONFIG.items():
+    for platform, config in PLATFORMS_CONFIG.items():
         for domain in config['domains']:
             if domain in url_lower:
                 return platform
     return 'unknown'
 
 
-def get_cookies_path(url: str) -> str | None:
-    """Get the cookies file path for a given URL."""
-    platform = detect_platform(url)
-    if platform in COOKIES_CONFIG:
-        return COOKIES_CONFIG[platform]['path']
+def get_cookies_path(platform: str) -> str | None:
+    """Get cookies path if platform needs cookies (only YouTube)."""
+    if platform == 'youtube':
+        return YOUTUBE_COOKIES_PATH
     return None
 
 # Concurrency configuration (optimized for 4 OCPU / 24GB RAM)
@@ -126,33 +127,29 @@ async def update_ytdlp_task():
 
 
 async def download_cookies_task():
-    """Background task: download all platform cookies every hour."""
+    """Background task: download YouTube cookies every hour."""
     while True:
-        for platform, config in COOKIES_CONFIG.items():
-            if config['url'] is None:
-                continue  # Skip platforms without cookies (e.g., TikTok)
+        try:
+            print("[Cookies] Downloading YouTube cookies...")
 
-            try:
-                print(f"[Cookies] Downloading {platform} cookies...")
+            # Create request without cache
+            req = urllib.request.Request(YOUTUBE_COOKIES_URL, headers={
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'User-Agent': 'Mozilla/5.0'
+            })
 
-                # Create request without cache
-                req = urllib.request.Request(config['url'], headers={
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'User-Agent': 'Mozilla/5.0'
-                })
+            with urllib.request.urlopen(req, timeout=30) as response:
+                content = response.read()
 
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    content = response.read()
+            with open(YOUTUBE_COOKIES_PATH, 'wb') as f:
+                f.write(content)
 
-                with open(config['path'], 'wb') as f:
-                    f.write(content)
+            size = os.path.getsize(YOUTUBE_COOKIES_PATH)
+            print(f"[Cookies] YouTube: {size} bytes")
 
-                size = os.path.getsize(config['path'])
-                print(f"[Cookies] {platform}: {size} bytes")
-
-            except Exception as e:
-                print(f"[Cookies] {platform} download error: {e}")
+        except Exception as e:
+            print(f"[Cookies] YouTube download error: {e}")
 
         # Wait 1 hour before next download
         await asyncio.sleep(COOKIES_REFRESH_INTERVAL)
@@ -220,6 +217,8 @@ class ExtractResponse(BaseModel):
     title: str
     duration: int
     thumbnail: Optional[str]
+    platform: str  # youtube, tiktok, instagram, facebook, unknown
+    audio_separated: bool  # True if audio is separate from video (YouTube/Instagram/Facebook), False if combined (TikTok)
     video_manifest: ManifestInfo
     audio_manifest: ManifestInfo
 
@@ -602,10 +601,9 @@ async def extract_manifests(request: ExtractRequest):
         print(f"[API] Processing URL: {request.url} (active: {stats.active_extractions}/{MAX_CONCURRENT_EXTRACTIONS})")
         print(f"[API] Max video height: {request.max_video_height}")
 
-        # Extract video info (uses centrally managed cookies)
-        # Auto-detect platform and use appropriate cookies
+        # Auto-detect platform and get cookies path (only YouTube needs cookies)
         platform = detect_platform(request.url)
-        cookies_path = get_cookies_path(request.url)
+        cookies_path = get_cookies_path(platform)
         print(f"[API] Platform detected: {platform}")
 
         info = await get_video_info(request.url, cookies_path)
@@ -622,8 +620,12 @@ async def extract_manifests(request: ExtractRequest):
         video_format = select_best_video_format(formats, request.max_video_height)
         audio_format = select_best_audio_format(formats)
 
+        # Check if audio is separated (audio-only format) or combined with video
+        # YouTube/Instagram/Facebook have separate audio tracks, TikTok has combined
+        audio_separated = audio_format.get('vcodec') == 'none'
+
         print(f"[API] Selected video: {video_format.get('format_id')} - {video_format.get('height')}p")
-        print(f"[API] Selected audio: {audio_format.get('format_id')} - {audio_format.get('ext')}")
+        print(f"[API] Selected audio: {audio_format.get('format_id')} - {audio_format.get('ext')} (separated: {audio_separated})")
 
         # Extract fragment URLs (run in parallel)
         video_fragments, audio_fragments = await asyncio.gather(
@@ -642,6 +644,8 @@ async def extract_manifests(request: ExtractRequest):
             title=title,
             duration=duration,
             thumbnail=info.get('thumbnail'),
+            platform=platform,
+            audio_separated=audio_separated,
             video_manifest=ManifestInfo(**video_manifest),
             audio_manifest=ManifestInfo(**audio_manifest),
         )
