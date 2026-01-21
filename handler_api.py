@@ -236,6 +236,7 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
     """Extract video info with all format details using yt-dlp (async) with retry."""
     cmd = [
         'yt-dlp',
+        '--ignore-config',  # Avoid config file conflicts
         '--dump-json',
         '--no-download',
         '--remote-components', 'ejs:github',  # deno for n-parameter
