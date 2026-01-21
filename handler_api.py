@@ -245,7 +245,7 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
 
 
 def select_best_video_format(formats: list, max_height: int = 720) -> dict:
-    """Select the best video format with height <= max_height."""
+    """Select the best video format with height <= max_height. Prioritizes VP9 codec."""
     video_formats = [
         f for f in formats
         if f.get('vcodec') != 'none'
@@ -268,6 +268,7 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
     def format_score(f):
         height = f.get('height', 0)
         tbr = f.get('tbr', 0) or 0
+        vcodec = f.get('vcodec', '')
         ext = f.get('ext', '')
 
         fragments = f.get('fragments', [])
@@ -287,6 +288,14 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
         else:
             url_score = 1
 
+        # Prioritize VP9 codec
+        if 'vp9' in vcodec.lower() or 'vp09' in vcodec.lower():
+            codec_score = 2
+        elif 'avc' in vcodec.lower() or 'h264' in vcodec.lower():
+            codec_score = 1
+        else:
+            codec_score = 0
+
         if ext == 'webm':
             ext_score = 2
         elif ext == 'mp4':
@@ -294,14 +303,14 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
         else:
             ext_score = 0
 
-        return (url_score, ext_score, height, tbr)
+        return (url_score, codec_score, ext_score, height, tbr)
 
     video_formats.sort(key=format_score, reverse=True)
     return video_formats[0]
 
 
 def select_best_audio_format(formats: list) -> dict:
-    """Select the best audio-only format."""
+    """Select the best audio-only format. Prioritizes original track and Opus codec."""
     audio_formats = [
         f for f in formats
         if f.get('vcodec') == 'none'
@@ -312,12 +321,25 @@ def select_best_audio_format(formats: list) -> dict:
         raise Exception("No audio-only format found")
 
     def audio_score(f):
-        ext_score = 1 if f.get('ext') == 'm4a' else 0
+        # Prioritize original audio track (higher language_preference = original)
+        lang_pref = f.get('language_preference', 0) or 0
+
+        acodec = f.get('acodec', '')
+        # Prioritize Opus codec
+        if 'opus' in acodec.lower():
+            codec_score = 2
+        elif 'aac' in acodec.lower() or 'mp4a' in acodec.lower():
+            codec_score = 1
+        else:
+            codec_score = 0
+
         abr = f.get('abr', 0) or 0
-        return (ext_score, abr)
+        return (lang_pref, codec_score, abr)
 
     audio_formats.sort(key=audio_score, reverse=True)
-    return audio_formats[0]
+    selected = audio_formats[0]
+    print(f"[Audio] Selected: lang_pref={selected.get('language_preference')}, codec={selected.get('acodec')}, lang={selected.get('language')}")
+    return selected
 
 
 def _fetch_hls_segments_sync(manifest_url: str) -> list:
