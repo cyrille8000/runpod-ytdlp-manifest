@@ -1,13 +1,15 @@
 """
-OCI Docker - YouTube Manifest Extractor API
+OCI Docker - Multi-Platform Video Manifest Extractor API
 
-FastAPI server that extracts YouTube video/audio manifest URLs.
+FastAPI server that extracts video/audio manifest URLs from multiple platforms.
+Supports: YouTube, TikTok, Instagram, Facebook
 Replaces RunPod serverless handler for always-on OCI deployment.
 
 Endpoints:
-- POST /extract - Extract video/audio manifests from YouTube URL
+- POST /extract - Extract video/audio manifests from URL (auto-detects platform)
 - POST /orchestrateur-gpu - GPU orchestrator (TODO)
 - GET /health - Health check
+- GET /stats - Server statistics
 """
 
 from fastapi import FastAPI, HTTPException
@@ -22,11 +24,49 @@ import urllib.request
 import uvicorn
 import asyncio
 
-# Cookies configuration
-COOKIES_URL = "https://files.dubbingspark.com/config/youtube_cookies.txt"
-COOKIES_PATH = '/tmp/cookies.txt'
+# Cookies configuration (multi-platform)
+COOKIES_CONFIG = {
+    'youtube': {
+        'url': 'https://files.dubbingspark.com/config/youtube_cookies.txt',
+        'path': '/tmp/youtube_cookies.txt',
+        'domains': ['youtube.com', 'youtu.be']
+    },
+    'instagram': {
+        'url': 'https://files.dubbingspark.com/config/instagram_cookies.txt',
+        'path': '/tmp/instagram_cookies.txt',
+        'domains': ['instagram.com']
+    },
+    'facebook': {
+        'url': 'https://files.dubbingspark.com/config/facebook_cookies.txt',
+        'path': '/tmp/facebook_cookies.txt',
+        'domains': ['facebook.com', 'fb.watch']
+    },
+    'tiktok': {
+        'url': None,  # TikTok doesn't need cookies
+        'path': None,
+        'domains': ['tiktok.com']
+    }
+}
 COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
 YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
+
+
+def detect_platform(url: str) -> str:
+    """Detect platform from URL."""
+    url_lower = url.lower()
+    for platform, config in COOKIES_CONFIG.items():
+        for domain in config['domains']:
+            if domain in url_lower:
+                return platform
+    return 'unknown'
+
+
+def get_cookies_path(url: str) -> str | None:
+    """Get the cookies file path for a given URL."""
+    platform = detect_platform(url)
+    if platform in COOKIES_CONFIG:
+        return COOKIES_CONFIG[platform]['path']
+    return None
 
 # Concurrency configuration (optimized for 4 OCPU / 24GB RAM)
 MAX_CONCURRENT_EXTRACTIONS = 60  # Max simultaneous yt-dlp processes
@@ -86,29 +126,33 @@ async def update_ytdlp_task():
 
 
 async def download_cookies_task():
-    """Background task: download cookies every hour."""
+    """Background task: download all platform cookies every hour."""
     while True:
-        try:
-            print(f"[Cookies] Downloading from {COOKIES_URL}...")
+        for platform, config in COOKIES_CONFIG.items():
+            if config['url'] is None:
+                continue  # Skip platforms without cookies (e.g., TikTok)
 
-            # Create request without cache
-            req = urllib.request.Request(COOKIES_URL, headers={
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'User-Agent': 'Mozilla/5.0'
-            })
+            try:
+                print(f"[Cookies] Downloading {platform} cookies...")
 
-            with urllib.request.urlopen(req, timeout=30) as response:
-                content = response.read()
+                # Create request without cache
+                req = urllib.request.Request(config['url'], headers={
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'User-Agent': 'Mozilla/5.0'
+                })
 
-            with open(COOKIES_PATH, 'wb') as f:
-                f.write(content)
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    content = response.read()
 
-            size = os.path.getsize(COOKIES_PATH)
-            print(f"[Cookies] Downloaded: {size} bytes")
+                with open(config['path'], 'wb') as f:
+                    f.write(content)
 
-        except Exception as e:
-            print(f"[Cookies] Download error: {e}")
+                size = os.path.getsize(config['path'])
+                print(f"[Cookies] {platform}: {size} bytes")
+
+            except Exception as e:
+                print(f"[Cookies] {platform} download error: {e}")
 
         # Wait 1 hour before next download
         await asyncio.sleep(COOKIES_REFRESH_INTERVAL)
@@ -558,7 +602,12 @@ async def extract_manifests(request: ExtractRequest):
         print(f"[API] Max video height: {request.max_video_height}")
 
         # Extract video info (uses centrally managed cookies)
-        info = await get_video_info(request.url, COOKIES_PATH)
+        # Auto-detect platform and use appropriate cookies
+        platform = detect_platform(request.url)
+        cookies_path = get_cookies_path(request.url)
+        print(f"[API] Platform detected: {platform}")
+
+        info = await get_video_info(request.url, cookies_path)
 
         title = info.get('title', 'Unknown')
         duration = info.get('duration', 0)
