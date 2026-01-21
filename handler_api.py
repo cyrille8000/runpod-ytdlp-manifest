@@ -244,8 +244,20 @@ async def get_video_info(url: str, cookies_path: str = None) -> dict:
     raise Exception(last_error)
 
 
+def get_video_dimension(f: dict) -> int:
+    """Get the smaller dimension (for vertical video support).
+    For horizontal video (1280x720): returns 720
+    For vertical video (576x1024): returns 576"""
+    height = f.get('height') or 0
+    width = f.get('width') or 0
+    if height and width:
+        return min(height, width)
+    return height or width
+
+
 def select_best_video_format(formats: list, max_height: int = 720) -> dict:
-    """Select the best video format with height <= max_height. Prioritizes VP9 codec.
+    """Select the best video format with dimension <= max_height. Prioritizes VP9 codec.
+    Uses min(width, height) for vertical video support (TikTok, Instagram, etc.).
     Falls back to combined (video+audio) formats for platforms like TikTok."""
 
     # First try: video-only formats (YouTube style)
@@ -253,23 +265,23 @@ def select_best_video_format(formats: list, max_height: int = 720) -> dict:
         f for f in formats
         if f.get('vcodec') != 'none'
         and f.get('acodec') == 'none'
-        and f.get('height') is not None
-        and f.get('height') <= max_height
+        and get_video_dimension(f) > 0
+        and get_video_dimension(f) <= max_height
     ]
 
-    # Fallback: combined formats with video (TikTok style)
+    # Fallback: combined formats with video (TikTok/Instagram/Facebook style)
     if not video_formats:
         video_formats = [
             f for f in formats
             if f.get('vcodec') != 'none'
-            and f.get('height') is not None
-            and f.get('height') <= max_height
+            and get_video_dimension(f) > 0
+            and get_video_dimension(f) <= max_height
         ]
         if video_formats:
-            print("[Video] No video-only formats, using combined format (TikTok mode)")
+            print("[Video] No video-only formats, using combined format (TikTok/Insta/FB mode)")
 
     if not video_formats:
-        raise Exception(f"No video format found with height <= {max_height}")
+        raise Exception(f"No video format found with dimension <= {max_height}")
 
     def format_score(f):
         height = f.get('height', 0)
