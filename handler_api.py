@@ -609,7 +609,7 @@ async def extract_manifests(request: ExtractRequest):
         info = await get_video_info(request.url, cookies_path)
 
         title = info.get('title', 'Unknown')
-        duration = info.get('duration', 0)
+        duration = int(info.get('duration', 0) or 0)  # Convert to int (Facebook returns float)
         formats = info.get('formats', [])
 
         print(f"[API] Title: {title}")
