@@ -24,31 +24,32 @@ import urllib.request
 import uvicorn
 import asyncio
 
-# Platform configuration
-# Only YouTube requires cookies (rate limiting)
-# TikTok, Instagram, Facebook work without cookies
+# Platform configuration with cookies
+# YouTube: required (rate limiting)
+# Instagram/Facebook: required (server IP rate-limited)
+# TikTok: not needed
 PLATFORMS_CONFIG = {
     'youtube': {
         'domains': ['youtube.com', 'youtu.be'],
-        'needs_cookies': True
-    },
-    'tiktok': {
-        'domains': ['tiktok.com'],
-        'needs_cookies': False
+        'cookies_url': 'https://files.dubbingspark.com/config/youtube_cookies.txt',
+        'cookies_path': '/tmp/youtube_cookies.txt'
     },
     'instagram': {
         'domains': ['instagram.com'],
-        'needs_cookies': False
+        'cookies_url': 'https://files.dubbingspark.com/config/instagram_cookies.txt',
+        'cookies_path': '/tmp/instagram_cookies.txt'
     },
     'facebook': {
         'domains': ['facebook.com', 'fb.watch'],
-        'needs_cookies': False
+        'cookies_url': 'https://files.dubbingspark.com/config/facebook_cookies.txt',
+        'cookies_path': '/tmp/facebook_cookies.txt'
+    },
+    'tiktok': {
+        'domains': ['tiktok.com'],
+        'cookies_url': None,
+        'cookies_path': None
     }
 }
-
-# YouTube cookies configuration (only platform that needs cookies)
-YOUTUBE_COOKIES_URL = 'https://files.dubbingspark.com/config/youtube_cookies.txt'
-YOUTUBE_COOKIES_PATH = '/tmp/youtube_cookies.txt'
 COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
 YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
 
@@ -64,10 +65,9 @@ def detect_platform(url: str) -> str:
 
 
 def get_cookies_path(platform: str) -> str | None:
-    """Get cookies path if platform needs cookies (only YouTube)."""
-    if platform == 'youtube':
-        return YOUTUBE_COOKIES_PATH
-    return None
+    """Get cookies path if platform needs cookies."""
+    config = PLATFORMS_CONFIG.get(platform, {})
+    return config.get('cookies_path')
 
 # Concurrency configuration (optimized for 4 OCPU / 24GB RAM)
 MAX_CONCURRENT_EXTRACTIONS = 60  # Max simultaneous yt-dlp processes
@@ -127,29 +127,37 @@ async def update_ytdlp_task():
 
 
 async def download_cookies_task():
-    """Background task: download YouTube cookies every hour."""
+    """Background task: download cookies for all platforms every hour."""
     while True:
-        try:
-            print("[Cookies] Downloading YouTube cookies...")
+        print("[Cookies] Downloading cookies for all platforms...")
 
-            # Create request without cache
-            req = urllib.request.Request(YOUTUBE_COOKIES_URL, headers={
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'User-Agent': 'Mozilla/5.0'
-            })
+        for platform, config in PLATFORMS_CONFIG.items():
+            cookies_url = config.get('cookies_url')
+            cookies_path = config.get('cookies_path')
 
-            with urllib.request.urlopen(req, timeout=30) as response:
-                content = response.read()
+            # Skip platforms without cookies (e.g., TikTok)
+            if not cookies_url or not cookies_path:
+                continue
 
-            with open(YOUTUBE_COOKIES_PATH, 'wb') as f:
-                f.write(content)
+            try:
+                # Create request without cache
+                req = urllib.request.Request(cookies_url, headers={
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'User-Agent': 'Mozilla/5.0'
+                })
 
-            size = os.path.getsize(YOUTUBE_COOKIES_PATH)
-            print(f"[Cookies] YouTube: {size} bytes")
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    content = response.read()
 
-        except Exception as e:
-            print(f"[Cookies] YouTube download error: {e}")
+                with open(cookies_path, 'wb') as f:
+                    f.write(content)
+
+                size = os.path.getsize(cookies_path)
+                print(f"[Cookies] {platform}: {size} bytes")
+
+            except Exception as e:
+                print(f"[Cookies] {platform} download error: {e}")
 
         # Wait 1 hour before next download
         await asyncio.sleep(COOKIES_REFRESH_INTERVAL)
