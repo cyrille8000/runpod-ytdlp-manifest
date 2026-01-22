@@ -24,19 +24,12 @@ import urllib.request
 import uvicorn
 import asyncio
 
-# Platform configuration
-# YouTube: cookies required (rate limiting)
-# TikTok: no cookies needed
+# Platform configuration (YouTube only)
 PLATFORMS_CONFIG = {
     'youtube': {
         'domains': ['youtube.com', 'youtu.be'],
         'cookies_url': 'https://files.dubbingspark.com/config/youtube_cookies.txt',
         'cookies_path': '/tmp/youtube_cookies.txt'
-    },
-    'tiktok': {
-        'domains': ['tiktok.com'],
-        'cookies_url': None,
-        'cookies_path': None
     }
 }
 COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
