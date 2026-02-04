@@ -33,7 +33,7 @@ PLATFORMS_CONFIG = {
     }
 }
 COOKIES_REFRESH_INTERVAL = 3600  # 1 hour in seconds
-YTDLP_UPDATE_INTERVAL = 86400  # 24 hours in seconds
+YTDLP_UPDATE_INTERVAL = 21600  # 6 hours in seconds
 
 
 def detect_platform(url: str) -> str:
